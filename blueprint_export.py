@@ -1,4 +1,5 @@
 """
+===============================================================================
 blueprint_export.py
 -------------------------------------------------------------------------------
 Shared data contract between the two stages of the CA / GA / SOM pipeline.
@@ -8,19 +9,48 @@ Shared data contract between the two stages of the CA / GA / SOM pipeline.
 
 Stage 1 explores cheaply and evolves. Stage 2 details expensively, once, on a
 blueprint you have already chosen. This module is the handoff: Stage 1 writes,
-Stage 2 reads.
+Stage 2 reads. Neither script's own logic needs to change beyond a few lines.
 
 Original research and algorithm:
     Amiina Bakunowicz, MSc Thesis, University of East London, 2013
 
+-------------------------------------------------------------------------------
+WHAT GETS SAVED
+    The blueprint is the genotype plus the CA context needed to rebuild the
+    phenotype deterministically:
+
+        chromosome   the binary string -- the true genotype
+        values       decoded gene values (redundant, but useful for inspection)
+        statesCA     functional state of every CA cell, in flat index order
+        grid         CAunitsX / CAunitsY / CAunitsZ / widthCA / FLOORHEIGHT
+        fitness      total plus per-component breakdown, for the record
+        meta         generation, individual id, colour, timestamp, note
+
+    Geometry GUIDs are deliberately NOT saved. They are meaningless outside
+    the Rhino session that created them.
+
+-------------------------------------------------------------------------------
 WHY statesCA MATTERS
     Both scripts currently generate statesCA randomly at the start of a run.
     That means a Stage 2 run today dresses a DIFFERENT building than whatever
-    Stage 1 evolved. Carrying statesCA across is what connects the two stages.
+    Stage 1 evolved. Carrying statesCA across is what actually connects the
+    two stages into one pipeline rather than two similar-looking scripts.
 
+-------------------------------------------------------------------------------
+WHY THE GRID IS SAVED
+    Stage 1 typically runs small (3 x 3 x 1) to explore fast; Stage 2 runs
+    tall (4 x 4 x 24). load_blueprint() warns when the loaded grid does not
+    match the receiving script's globals, and adapt_blueprint_to_grid() can
+    stretch a low blueprint up through more floors so a cheap exploration can
+    drive a tall model. Read that function's docstring before trusting it --
+    it is an interpretation, not a neutral conversion.
+
+-------------------------------------------------------------------------------
 DEPENDENCIES
-    json, os, datetime only. No Rhino calls. Works under IronPython 2.7 and
-    CPython 3.x.
+    json, os, datetime only. No Rhino calls, no third-party packages. Works
+    under IronPython 2.7 and CPython 3.x, so it sits alongside either the
+    2013 originals or a modernised port without change.
+===============================================================================
 """
 
 import json
@@ -32,24 +62,37 @@ EXPORT_DIR = "exports"
 FORMAT_VERSION = 1
 
 
-# ============================================================
+# =============================================================================
 # WRITING  (call from Stage 1)
-# ============================================================
+# =============================================================================
 
 def save_blueprint(individual, statesCA, grid, path=None,
                    generation=None, components=None, note=""):
     """
     Serialise one evolved individual as a reusable blueprint.
 
-    individual  needs .chromosome, .values, .fitness, .id, .colour.
-                Geometry GUIDs are deliberately NOT saved -- they are
-                meaningless outside the Rhino session that made them.
+    individual  an Individual instance. Needs .chromosome, .values, .fitness,
+                .id and .colour. Geometry GUIDs are deliberately NOT saved --
+                they are meaningless outside the Rhino session that made them.
+
     statesCA    the flat list of CA cell states used for this run.
-    grid        build it with grid_dict() below.
-    components  optional fitness breakdown dict. Worth passing -- a total
-                alone won't tell you WHY a blueprint won.
-    note        free text. "client liked the twist at floor 14" beats any
-                number here.
+
+    grid        dict of the CA globals. Build it with grid_dict() below so the
+                keys always match what load_blueprint() expects.
+
+    path        output file path. Defaults to
+                    exports/blueprint_gen<G>_id<N>_fit<F>.json
+
+    generation  which generation this individual came from.
+
+    components  optional dict of the fitness breakdown, e.g.
+                    {"distFactor": 91.2, "GSfactor": 200, "XXareasFactor": 64.8}
+                Worth passing. A total fitness alone tells you little about
+                WHY a blueprint won, and that is exactly what you will want to
+                know six months later.
+
+    note        free text. Use it. "client liked the twist at floor 14" is
+                more useful than any number stored here.
 
     Returns the path written.
     """
@@ -101,15 +144,17 @@ def save_blueprint(individual, statesCA, grid, path=None,
 def save_best_of_run(candidates, statesCA, grid, top=1,
                      generation=None, note=""):
     """
-    Save the top N candidates from a finished run.
+    Convenience wrapper: save the top N candidates from a finished run.
 
-    Pass allIndivNeurons -- the list showBest() already ranks over, holding
-    both GA individuals and fit SOM neurons converted to individuals, so
-    SOM-born candidates are exportable too.
+    Pass the same list Stage 1's showBest() works over -- typically
+    allIndivNeurons, which holds both the GA individuals and the fit SOM
+    neurons converted to individuals. So SOM-born candidates are exportable
+    too, which is the whole point of having the map.
 
-    Saving the top 5 rather than only rank 1 matches the thesis: "choosing
-    the fittest ceases to be essential. A fit enough model that looks
-    acceptable to the eye of the designer becomes the solution."
+    Saving the top 3 or 5 rather than only rank 1 is deliberate, and matches
+    the thesis's own conclusion: "choosing the fittest ceases to be
+    essential. A fit enough model that looks acceptable to the eye of the
+    designer becomes the solution." You choose by eye afterwards.
 
     Returns a list of paths written.
     """
@@ -118,27 +163,34 @@ def save_best_of_run(candidates, statesCA, grid, top=1,
     written = []
     for c in scored[:top]:
         written.append(save_blueprint(
-            c, statesCA, grid, generation=generation, note=note))
+            c, statesCA, grid,
+            generation=generation,
+            components=getattr(c, "components", None),
+            note=note))
     return written
 
 
-# ============================================================
+# =============================================================================
 # READING  (call from Stage 2)
-# ============================================================
+# =============================================================================
 
 def load_blueprint(path, expected_grid=None, strict=False):
     """
     Load a blueprint written by Stage 1.
 
-    expected_grid  pass grid_dict() from the receiving script; any mismatch
-                   is reported. Stops you silently dressing a 9-cell
-                   blueprint with 384-cell geometry.
-    strict         True raises on mismatch instead of warning.
+    expected_grid  pass grid_dict() from the receiving script and any
+                   mismatch is reported. This is the check that stops you
+                   silently dressing a 9-cell blueprint with 384-cell
+                   geometry.
 
-    Read the result as:
+    strict         True raises on grid mismatch instead of warning.
+
+    Returns the payload dict. Read it as:
+
         bp = load_blueprint("exports/blueprint_gen7_id2_fit412.json")
-        values   = bp["genotype"]["values"]
-        statesCA = bp["statesCA"]
+        chromosome = bp["genotype"]["chromosome"]
+        values     = bp["genotype"]["values"]
+        statesCA   = bp["statesCA"]
     """
     with open(path, "r") as f:
         payload = json.load(f)
@@ -147,18 +199,19 @@ def load_blueprint(path, expected_grid=None, strict=False):
 
     version = payload.get("format_version")
     if version != FORMAT_VERSION:
-        print("[blueprint] note: file format v{}, module is v{}".format(
+        print("[blueprint] note: file format v{}, this module is v{}".format(
             version, FORMAT_VERSION))
 
     if expected_grid is not None:
         problems = compare_grids(payload["grid"], expected_grid)
         if problems:
-            message = ("[blueprint] grid mismatch:\n  " +
-                       "\n  ".join(problems))
+            message = ("[blueprint] grid mismatch between blueprint and this "
+                       "script:\n  " + "\n  ".join(problems))
             if strict:
                 raise ValueError(message)
             print(message)
-            print("[blueprint] see adapt_blueprint_to_grid() if intentional")
+            print("[blueprint] see adapt_blueprint_to_grid() if this is "
+                  "intentional (e.g. a low exploration driving a tall model)")
 
     return payload
 
@@ -178,28 +231,42 @@ def compare_grids(saved, expected):
 
 def adapt_blueprint_to_grid(payload, target_grid, floor_mode="tile"):
     """
-    Stretch a blueprint onto a different grid. Returns a NEW payload.
+    Stretch a blueprint onto a different grid. Returns a NEW payload; the
+    original is not modified.
 
-    THIS IS AN INTERPRETATION, NOT A CONVERSION. values[0..5] -- the three
-    unit-type dimensions carrying most of the design intent -- are
-    grid-independent and transfer cleanly. Per-cell offsets and statesCA are
-    not, so they get repeated:
+    THIS IS AN INTERPRETATION, NOT A CONVERSION.
 
-    floor_mode="tile"     repeat floors cyclically up the target height.
-                          Predictable. Good default.
-    floor_mode="stretch"  map each target floor proportionally onto the
-                          nearest source floor. Preserves a vertical gesture
-                          (taper, bulge) across a different floor count.
+    The genes that matter most -- values[0..5], the width and length of the
+    living, working and resting unit types -- are grid-independent, so they
+    carry across cleanly. The per-cell position offsets and statesCA are not,
+    so they have to be repeated. Be aware of what you are accepting:
 
-    X and Y must match -- widening the plan would mean inventing cells with
-    no evolved basis. Run Stage 1 again at the target grid instead.
+        floor_mode="tile"     repeat the blueprint's floors cyclically up the
+                              target height. A 1-floor blueprint becomes a
+                              uniform extrusion; a 3-floor blueprint becomes a
+                              repeating rhythm. Honest and predictable. Good
+                              default.
+
+        floor_mode="stretch"  map each target floor proportionally onto the
+                              nearest source floor. Preserves the blueprint's
+                              vertical gesture (a taper, a bulge) across a
+                              different floor count. Better when the source
+                              has several floors to interpolate between.
+
+    X and Y must match. Widening the plan grid would require inventing whole
+    new cells with no basis in the evolved genotype, which would be fiction
+    rather than adaptation -- do a fresh Stage 1 run at the right grid instead.
+
+    Adaptation invalidates the binary chromosome, so it is emptied and flagged
+    in meta.adapted_from. An adapted blueprint can be DRESSED but not BRED
+    from.
     """
     src = payload["grid"]
     if (src["CAunitsX"] != target_grid["CAunitsX"] or
             src["CAunitsY"] != target_grid["CAunitsY"]):
         raise ValueError(
             "cannot adapt across different plan grids "
-            "({}x{} -> {}x{}). Run Stage 1 at the target grid.".format(
+            "({}x{} -> {}x{}). Run Stage 1 again at the target grid.".format(
                 src["CAunitsX"], src["CAunitsY"],
                 target_grid["CAunitsX"], target_grid["CAunitsY"]))
 
@@ -207,16 +274,20 @@ def adapt_blueprint_to_grid(payload, target_grid, floor_mode="tile"):
     srcZ = src["CAunitsZ"]
     dstZ = target_grid["CAunitsZ"]
 
+    def source_floor_for(z):
+        if floor_mode == "stretch" and dstZ > 1 and srcZ > 1:
+            return int(round(z * (srcZ - 1) / float(dstZ - 1)))
+        return z % srcZ
+
     srcStates = payload["statesCA"]
     newStates = []
     for z in range(dstZ):
-        if floor_mode == "stretch" and dstZ > 1 and srcZ > 1:
-            srcFloor = int(round(z * (srcZ - 1) / float(dstZ - 1)))
-        else:
-            srcFloor = z % srcZ
-        start = srcFloor * unitsPerFloor
+        start = source_floor_for(z) * unitsPerFloor
         newStates.extend(srcStates[start:start + unitsPerFloor])
 
+    # values[0..5] are the three unit-type dimensions and transfer directly.
+    # Everything beyond index 5 is a per-cell offset pair, so it is retiled
+    # the same way as statesCA to stay consistent with the states above.
     srcValues = payload["genotype"]["values"]
     header = srcValues[:6]
     offsets = srcValues[6:]
@@ -224,11 +295,7 @@ def adapt_blueprint_to_grid(payload, target_grid, floor_mode="tile"):
     perFloorOffsets = unitsPerFloor * 2
     if offsets and perFloorOffsets:
         for z in range(dstZ):
-            if floor_mode == "stretch" and dstZ > 1 and srcZ > 1:
-                srcFloor = int(round(z * (srcZ - 1) / float(dstZ - 1)))
-            else:
-                srcFloor = z % srcZ
-            start = srcFloor * perFloorOffsets
+            start = source_floor_for(z) * perFloorOffsets
             chunk = offsets[start:start + perFloorOffsets]
             if len(chunk) < perFloorOffsets:
                 chunk = chunk + [0] * (perFloorOffsets - len(chunk))
@@ -238,8 +305,8 @@ def adapt_blueprint_to_grid(payload, target_grid, floor_mode="tile"):
     adapted["grid"] = dict(target_grid)
     adapted["statesCA"] = newStates
     adapted["genotype"]["values"] = header + newOffsets
-    # The chromosome no longer matches the adapted values. Flag it rather
-    # than fabricate a matching binary string.
+    # The chromosome no longer corresponds to the adapted values. Flag it
+    # rather than fabricate a matching binary string.
     adapted["genotype"]["chromosome"] = []
     adapted["meta"]["adapted_from"] = {
         "grid": dict(src),
@@ -249,12 +316,16 @@ def adapt_blueprint_to_grid(payload, target_grid, floor_mode="tile"):
     return adapted
 
 
-# ============================================================
+# =============================================================================
 # HELPERS
-# ============================================================
+# =============================================================================
 
 def grid_dict(CAunitsX, CAunitsY, CAunitsZ, widthCA, FLOORHEIGHT):
-    """Build the grid dict from your script's globals, in this order."""
+    """
+    Build the grid dict. Call with your script's globals, in this order:
+
+        grid = grid_dict(CAunitsX, CAunitsY, CAunitsZ, widthCA, FLOORHEIGHT)
+    """
     return {
         "CAunitsX": CAunitsX,
         "CAunitsY": CAunitsY,
@@ -266,8 +337,15 @@ def grid_dict(CAunitsX, CAunitsY, CAunitsZ, widthCA, FLOORHEIGHT):
 
 def list_blueprints(directory=EXPORT_DIR):
     """
-    Inspect saved blueprints without opening Rhino. Returns dicts sorted by
-    fitness, best first.
+    Inspect saved blueprints without opening Rhino.
+
+    Returns a list of dicts sorted by fitness, best first, each with path,
+    fitness, components, generation, grid summary, note and timestamp.
+    Useful for deciding which blueprint is worth the cost of dressing.
+
+        import blueprint_export as bp
+        for row in bp.list_blueprints():
+            print(row["fitness"], row["grid"], row["path"], row["note"])
     """
     if not os.path.isdir(directory):
         return []
@@ -298,7 +376,10 @@ def list_blueprints(directory=EXPORT_DIR):
 
 
 def describe(payload):
-    """One-line summary, for printing to the Rhino console."""
+    """
+    One-line summary of a loaded blueprint, for printing to the Rhino
+    console when Stage 2 opens a file.
+    """
     g = payload.get("grid", {})
     meta = payload.get("meta", {})
     counts = {}
@@ -314,7 +395,10 @@ def describe(payload):
 
 
 def _validate(payload):
-    """Fail loudly and early on a malformed blueprint."""
+    """
+    Fail loudly and early on a malformed blueprint. Better a clear error at
+    load time than geometry that silently makes no sense.
+    """
     for key in ("grid", "genotype", "statesCA"):
         if key not in payload:
             raise ValueError("blueprint missing '{}'".format(key))
@@ -341,8 +425,9 @@ def _validate(payload):
 
 def _plain_list(seq):
     """
-    Coerce to JSON-safe numbers. Rhino/IronPython hands back Single, Int64
-    and .NET colour types that json cannot serialise.
+    Coerce to plain JSON-safe numbers. Rhino under IronPython hands back
+    Single, Int64 and .NET colour types that the json module cannot
+    serialise, so everything is normalised to int or rounded float here.
     """
     if seq is None:
         return None
@@ -358,6 +443,7 @@ def _plain_list(seq):
 
 
 def _plain_dict(d):
+    """Same coercion as _plain_list, for the fitness components dict."""
     out = {}
     for k, v in d.items():
         try:
