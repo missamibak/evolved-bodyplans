@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Evolved Bodyplans: A Cellular-Automata-Based Genetic Algorithm with Self-Organising Map for Architectural Design"
+type: software
+authors:
+  - family-names: Bakunowicz
+    given-names: Amiina
+repository-code: "https://github.com/missamibak/evolved-bodyplans"
+license: MIT
+version: "1.0.0"
+date-released: "2026-08-21"
+abstract: >
+  Rhino Python implementation of a cellular-automata-based genetic
+  algorithm combined with a self-organising map, developed for the
+  author's 2013 MSc thesis at the University of East London. Includes
+  the original 2013 source and a 2026 patch adding functional void-cell
+  support.
+references:
+  - type: thesis
+    title: "Neural Self-Organising Maps and Genetic Algorithm: Evolving 3D Cellular Automata Architectural Model"
+    authors:
+      - family-names: Bakunowicz
+        given-names: Amiina
+    institution:
+      name: "University of East London"
+    thesis-type: "MSc thesis"
+    year: 2013
