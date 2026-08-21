@@ -1,8 +1,17 @@
 """
-patch_stage1.py
+patch_stage1.py  --  version 2
 -------------------------------------------------------------------------------
 Applies the void-cell and neighbour-guard fixes to the Stage 1 script
 ("...boxes only.py") without hand-editing 82 KB of code.
+
+CHANGES IN v2 (after a real dry run against the 2013 source)
+    - Trailing comments are now ignored when matching code lines. v1 failed to
+      find the dead void branch because the source line carries a comment:
+          statesCA.append(statesCAall[3]) # creates void cell on outer layer...
+      Comment-only lines are still matched in full, because one rule anchors on
+      a comment deliberately.
+    - Removed a duplicate rule (old rule 14 had the same anchor as rule 12, so
+      it always reported 0 hits after 12 had consumed both occurrences).
 
 WHY THIS EXISTS
     The fixes documented in VOID_CELLS.md and FINDINGS.md touch about a dozen
@@ -12,10 +21,10 @@ WHY THIS EXISTS
     what it found, and refuses to write anything if the counts are wrong.
 
 HOW IT MATCHES
-    Lines are compared with ALL WHITESPACE REMOVED, so indentation and spacing
-    differences do not matter. Indentation of replacements is taken from the
-    line being replaced. No regular expressions, so you can audit every rule by
-    reading it.
+    Code lines are compared with all whitespace removed and any trailing
+    comment discarded, so indentation, spacing and comments do not matter.
+    Indentation of replacements is taken from the line being replaced. No
+    regular expressions, so every rule can be audited by reading it.
 
 USAGE
     python patch_stage1.py "AmiinaBakunowicz_MSc Thesis 2013_UEL_CA based GA_SOM_boxes only.py"
@@ -30,14 +39,18 @@ USAGE
         it does not merely speed it up.
 
     python patch_stage1.py "<input>" --write --force
-        Writes even if some rules did not match. Use only after reading the
-        report and understanding what was skipped.
+        Writes even if some rules did not match. Read the report first.
 
 SAFETY
     - Never modifies the input file. Always writes a new one.
-    - Runs on Python 2.7 and 3.x, so it works wherever you have either.
+    - Runs on Python 2.7 and 3.x.
     - Reports every rule as OK / PARTIAL / MISSING with actual vs expected hit
       counts, and lists the manual follow-ups it deliberately does not attempt.
+
+FIRST TEST AFTER PATCHING
+    Set VOID_RATE = 0.0 near the top of the patched file. That disables voids
+    entirely, so the patched script should behave identically to the original.
+    If it does, the plumbing is sound; raise VOID_RATE to 0.20 to see porosity.
 """
 
 import sys
@@ -49,10 +62,11 @@ HELPERS = [
     "",
     "# === void-cell support (inserted by patch_stage1.py) =====================",
     "# Share of OUTER-LAYER cells made void. 0.0 disables voids entirely and",
-    "# restores the original behaviour of a fully solid model.",
+    "# restores the original behaviour of a fully solid model. Start at 0.0 to",
+    "# confirm the patch changes nothing, then raise it.",
     "VOID_RATE = 0.20",
     "",
-    "# Counters used to keep fitness comparable between porous and solid models.",
+    "# Counters that keep fitness comparable between porous and solid models.",
     "# See VOID_CELLS.md: distFactor and XXareasFactor are reciprocals of sums",
     "# over Moore-neighbour pairs, so removing pairs inflates them. Scaling by",
     "# the pairs actually measured removes that bias.",
@@ -96,8 +110,17 @@ HELPERS = [
 
 
 def canon(line):
-    """Line with all whitespace removed, for tolerant comparison."""
-    return "".join(line.split())
+    """
+    Whitespace-free, comment-free form of a line, for tolerant comparison.
+
+    Comment-only lines keep their text, because rule 9 deliberately anchors on
+    a comment. Code lines drop anything from the first '#' onward, which is why
+    v2 finds the void branch that v1 missed.
+    """
+    stripped = line.strip()
+    if not stripped.startswith("#"):
+        stripped = stripped.split("#")[0]
+    return "".join(stripped.split())
 
 
 def indent_of(line):
@@ -108,9 +131,9 @@ def build_rules(som_float):
     """
     Each rule: (name, anchor_lines, replacement_lines, expected_hits, note)
 
-    anchor_lines      consecutive source lines, matched whitespace-insensitively
-    replacement_lines templates; leading spaces in a template are added to the
-                      indentation detected from the first anchor line
+    anchor_lines      consecutive source lines, matched loosely (see canon)
+    replacement_lines templates; leading spaces are added to the indentation
+                      detected from the first anchor line
     expected_hits     exact count required, or None to accept one or more
     """
     rules = []
@@ -173,8 +196,6 @@ def build_rules(som_float):
         "Same alignment requirement for the SOM neurons.",
     ))
 
-    # 5 -- guarded centroids. The originals test boxThis while dereferencing the
-    # neighbour, which becomes a live TypeError once None entries exist.
     rules.append((
         "5a. guarded centroid (own cell)",
         ["if boxThis is not None: centroidThis = rs.SurfaceVolumeCentroid(boxThis)[0]"],
@@ -192,7 +213,6 @@ def build_rules(som_float):
             "",
         ))
 
-    # 6 -- guarded distances that also count the pair.
     for n, suffix in enumerate(NEIGHBOURS, start=1):
         rules.append((
             "6. counted distance (%s)" % suffix,
@@ -203,7 +223,6 @@ def build_rules(som_float):
             "",
         ))
 
-    # 7 -- guarded boolean intersections.
     for suffix in NEIGHBOURS:
         rules.append((
             "7. guarded intersection (%s)" % suffix,
@@ -270,32 +289,24 @@ def build_rules(som_float):
     ))
 
     rules.append((
-        "12. filter voids before colouring a whole individual",
+        "12. filter voids before colouring an individual or winning neuron",
         ["rs.ObjectColor(self.guid, self.colour)"],
         ["rs.ObjectColor(_live(self.guid), self.colour)"],
         None,
-        "",
+        "Expect 2 hits: Individual.drawBodyplan and Neuron.update.",
     ))
 
     rules.append((
-        "13. filter voids before colouring a neuron",
+        "13. filter voids before colouring a clustered neuron",
         ["rs.ObjectColor(self.guid,col)"],
         ["rs.ObjectColor(_live(self.guid), col)"],
         None,
         "",
     ))
 
-    rules.append((
-        "14. filter voids before colouring a winning neuron",
-        ["rs.ObjectColor(self.guid, self.colour)"],
-        ["rs.ObjectColor(_live(self.guid), self.colour)"],
-        None,
-        "",
-    ))
-
     if som_float:
         rules.append((
-            "15. SOM float division (CHANGES BEHAVIOUR -- read FINDINGS.md #1)",
+            "14. SOM float division (CHANGES BEHAVIOUR -- read FINDINGS.md #1)",
             [
                 "WINLEARN = WINLEARN * (1 - (cycles / 600))",
                 "LEARN = LEARN * (1 - (cycles / 400))",
@@ -314,7 +325,7 @@ def build_rules(som_float):
 
 
 def apply_rule(lines, anchors, replacements):
-    """Replace every whitespace-insensitive match. Returns (new_lines, hits)."""
+    """Replace every loose match. Returns (new_lines, hits)."""
     canon_anchors = [canon(a) for a in anchors]
     span = len(canon_anchors)
     out = []
@@ -337,7 +348,6 @@ def apply_rule(lines, anchors, replacements):
 
 
 def insert_helpers(lines):
-    """Insert the helper block after the last import at the top of the file."""
     anchor = canon("from itertools import permutations")
     for i, line in enumerate(lines):
         if canon(line) == anchor:
@@ -347,14 +357,14 @@ def insert_helpers(lines):
 
 MANUAL_FOLLOWUPS = [
     "rs.DeleteObjects(...) calls on guid lists -- wrap with _live(...) if you hit",
-    "  a 'value cannot be None' error. Not automated because the call sites vary",
-    "  and a wrong edit here deletes the wrong geometry.",
+    "a 'value cannot be None' error. Not automated because the call sites vary",
+    "and a wrong edit here deletes the wrong geometry.",
     "rs.SelectObjects(...) in the artificial-selection path (selection option 3)",
-    "  -- same reasoning.",
+    "-- same reasoning.",
     "Stage 2 (the bodyplan script) is NOT handled by this patcher. Its tower loft",
-    "  matches ellipse division points across floors, so a void on one floor but",
-    "  not the next breaks the correspondence. Whether the skin should close over",
-    "  or open around a void is a design decision, not a mechanical one.",
+    "matches ellipse division points across floors, so a void on one floor but",
+    "not the next breaks the correspondence. Whether the skin should close over",
+    "or open around a void is a design decision, not a mechanical one.",
 ]
 
 
@@ -379,6 +389,7 @@ def main(argv):
         original = f.read()
     lines = original.split("\n")
 
+    print("patch_stage1.py v2")
     print("input : %s" % src)
     print("size  : %d bytes, %d lines" % (len(original), len(lines)))
     print("mode  : %s%s" % ("WRITE" if write else "DRY RUN",
@@ -386,7 +397,7 @@ def main(argv):
     print("")
 
     lines, helpers_ok = insert_helpers(lines)
-    print("%-52s %s" % ("0. insert helper block", "OK" if helpers_ok else "MISSING"))
+    print("%-58s %s" % ("0. insert helper block", "OK" if helpers_ok else "MISSING"))
     if not helpers_ok:
         print("   could not find 'from itertools import permutations'")
 
@@ -402,7 +413,7 @@ def main(argv):
         detail = "%d hit%s" % (hits, "" if hits == 1 else "s")
         if expected is not None:
             detail += " (expected %d)" % expected
-        print("%-52s %-8s %s" % (name, status, detail))
+        print("%-58s %-8s %s" % (name, status, detail))
         if note and status == "OK" and hits:
             print("   %s" % note)
 
@@ -418,7 +429,7 @@ def main(argv):
     print("")
     print("MANUAL FOLLOW-UPS (deliberately not automated):")
     for item in MANUAL_FOLLOWUPS:
-        print("  - %s" % item if not item.startswith(" ") else "   %s" % item.strip())
+        print("  %s" % item)
 
     if not write:
         print("")
@@ -428,9 +439,8 @@ def main(argv):
     if problems and not force:
         print("")
         print("REFUSING TO WRITE: %d rule(s) did not match as expected." % problems)
-        print("Read the report above. If the skipped rules are acceptable, re-run")
-        print("with --force. Do not force blindly -- a MISSING guard rule means")
-        print("voids will crash the fitness function at runtime.")
+        print("Read the report above. A MISSING guard rule means voids will crash")
+        print("the fitness function at runtime. Do not force blindly.")
         return 1
 
     stem = os.path.splitext(src)[0]
@@ -439,8 +449,9 @@ def main(argv):
         f.write(patched)
     print("")
     print("wrote: %s" % out_path)
-    print("Original untouched. Set VOID_RATE = 0.0 near the top to disable voids")
-    print("and confirm the patched file still reproduces solid-model behaviour.")
+    print("")
+    print("FIRST TEST: set VOID_RATE = 0.0 near the top of the patched file and")
+    print("confirm it behaves identically to the original. Then raise it to 0.20.")
     return 0
 
 
