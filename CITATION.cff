@@ -5,6 +5,7 @@ type: software
 authors:
   - family-names: Bakunowicz
     given-names: Amiina
+    orcid: "https://orcid.org/0009-0002-3711-0601"
 repository-code: "https://github.com/missamibak/evolved-bodyplans"
 license: MIT
 version: "1.0.0"
@@ -21,6 +22,7 @@ references:
     authors:
       - family-names: Bakunowicz
         given-names: Amiina
+        orcid: "https://orcid.org/0009-0002-3711-0601"
     institution:
       name: "University of East London"
     thesis-type: "MSc thesis"
