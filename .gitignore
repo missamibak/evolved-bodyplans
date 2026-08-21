@@ -1,0 +1,44 @@
+# Blueprint exports from Stage 1 runs -- regenerate, do not version
+exports/
+*.json
+!package.json
+
+# Fitness logs written by runGA()
+fitnessHistory.txt
+*.log
+
+# Rhino working files and backups
+*.3dm
+*.3dmbak
+*.rhl
+rhino_backup/
+
+# Grasshopper
+*.gh
+*.ghx
+*.ghuser
+
+# Revit / IFC intermediates from the export tests
+*.rvt
+*.rfa
+*.rte
+*.ifc
+*.dwg
+*.sat
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
