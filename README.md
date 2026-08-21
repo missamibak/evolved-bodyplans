@@ -21,6 +21,28 @@ The designer stays in the loop. Fitness is multi-criteria and deliberately
 non-absolute, so the stopping condition is "fit enough and acceptable to the
 eye", not "fittest".
 
+## Original Contribution
+
+This project's synthesis is uncommon rather than unprecedented: cellular
+automata provide the spatial substrate, a genetic algorithm searches the
+space of body-plan configurations, and a self-organising map interprets
+the resulting population by clustering neurons into coherent architectural
+forms. Related work exists for each pairing individually — CA-driven
+architectural generation (Herr & Kvan, 2007), GA-based form optimisation
+(Shea & Cagan), and SOM-based spatial clustering (Senatore) — but no prior
+study combining all three for architectural body-plan generation was found
+during a 2026 literature check. That makes this a modest, specific original
+contribution rather than a claim to a new field.
+
+A 2026 re-examination of the original 2013 code (see FINDINGS.md) also
+surfaced a previously undocumented behaviour: under Python 2's integer
+division, the SOM's neighbourhood-learning function silently stopped
+updating after cycle 100, meaning all 2013 results were produced by an
+inhibition-dominated variant of the algorithm rather than the smoothly
+converging one the thesis describes. This is disclosed rather than
+corrected retroactively, since it is itself a legitimate finding about
+the algorithm's behaviour under its original execution environment.
+
 ---
 
 ## A deliberate two-stage pipeline
